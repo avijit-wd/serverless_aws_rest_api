@@ -1,20 +1,46 @@
-import AWS from 'aws-sdk';
+import AWS from "aws-sdk";
 
 const dynamodb = new AWS.DynamoDB.DocumentClient();
+const sqs = new AWS.SQS();
 
 export async function closeAuction(auction) {
   const params = {
     TableName: process.env.AUCTION_TABLE_NAME,
     Key: { id: auction.id },
-    UpdateExpression: 'set #status = :status',
+    UpdateExpression: "set #status = :status",
     ExpressionAttributeValues: {
-      ':status': 'CLOSED',
+      ":status": "CLOSED",
     },
     ExpressionAttributeNames: {
-      '#status': 'status',
+      "#status": "status",
     },
   };
 
-  const result = await dynamodb.update(params).promise();
-  return result;
+  await dynamodb.update(params).promise();
+
+  const { title, seller, highestBid } = auction;
+  const { amount, bidder } = highestBid;
+
+  const notifyBidder = sqs
+    .sendMessage({
+      QueueUrl: process.env.MAIL_QUEUE_URL,
+      MessageBody: JSON.stringify({
+        subject: "You want an auction!",
+        recipient: bidder,
+        body: `What a great deal! You got yourself a ${title} for $${amount}`,
+      }),
+    })
+    .promise();
+  const notifySeller = sqs
+    .sendMessage({
+      QueueUrl: process.env.MAIL_QUEUE_URL,
+      MessageBody: JSON.stringify({
+        subject: "Your Item has been sold",
+        recipient: seller,
+        body: `Wooho your Item ${title} has been sold for $${amount}`,
+      }),
+    })
+    .promise();
+
+  return Promise.all([notifySeller, notifyBidder]);
 }
